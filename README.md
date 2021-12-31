@@ -14,8 +14,8 @@ It also tracks balances in the M blocks after the vote is cast and creating a fi
 You can specify your own values in the `config.py`:
 
 ```python
-BLOCKS_LEADING_UP_TO_THE_PROPOSAL = 44800
-BLOCKS_AFTER_VOTE_CAST = 44800
+BLOCKS_LEADING_UP_TO_THE_PROPOSAL = 100
+BLOCKS_AFTER_VOTE_CAST = 100
 VOTING_POWER_TH = 10000
 ```
 
