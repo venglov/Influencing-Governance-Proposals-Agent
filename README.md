@@ -18,7 +18,7 @@ The agent is separated into four threads:
 4. Fourth thread removes obsolete data from the database.
 
 ## Agent Flow
-![Influencing-Agent-Flow.png]()
+![Influencing-Agent-Flow.png](https://github.com/VVlovsky/Influencing-Governance-Proposals-Agent/blob/master/Influencing-Agent-Flow.png)
 
 ## Setup
 
