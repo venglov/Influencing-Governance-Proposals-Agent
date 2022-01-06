@@ -17,6 +17,9 @@ The agent is separated into four threads:
 3. Third thread detects voting power decreasing through `DelegateVotesChanged(address,uint256,uint256)` events after the VoteCast and emit an alert if there is an influencing.
 4. Fourth thread removes obsolete data from the database.
 
+## Agent Flow
+![Influencing-Agent-Flow.png]()
+
 ## Setup
 
 You can specify your own values in the `config.py`:
@@ -34,7 +37,7 @@ VOTING_POWER_TH_LOW = 1000
 Due to the need to store information for a long time the agent uses asynchronous database.
 This gives the advantage that even a restart or crash of the agent will not prevent him from discovering the vulnerability.
 However, checking the same transactions multiple times in a row can cause a uniqueness error in the database. To get around this 
-you need to remove the unique flag in `src/db/models.py` or add force drop_all `src/db/controller.py`:
+you need to remove the unique flag in `src/db/models.py` or add force drop_all in `src/db/controller.py`:
 ```python
 await conn.run_sync(base.metadata.drop_all)
 ```
