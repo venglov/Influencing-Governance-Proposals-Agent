@@ -115,7 +115,7 @@ async def detect_cast_vote(transaction_event: forta_agent.transaction_event.Tran
         # add this vote to the db
         await votes.paste_row(
             {'voter': voter, 'block_number': transaction_event.block_number, 'proposal_id': proposal_id,
-             'support': support, 'votes': votes_, 'reason': reason, 'influencing': influencing})
+             'support': support, 'votes': str(votes_), 'reason': reason, 'influencing': influencing})
         await votes.commit()
 
     return findings
@@ -144,7 +144,7 @@ async def detect_voting_power_decrease_after_cast(transaction_event: forta_agent
 
             # compare his voting power in the moment of the cast and current; emit an alert if the difference is bigger
             # than th
-            dif = vote.votes - new_balance
+            dif = int(vote.votes) - new_balance
             if dif > VOTING_POWER_TH_LOW:
                 findings.append(
                     InfluencingGovernanceProposalsFindings.influencing_after_voting(vote.proposal_id, delegate,

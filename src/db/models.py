@@ -19,7 +19,7 @@ async def wrapped_models(Base: declarative_base):
         voter = Column(String)
         support = Column(String)
         block_number = Column(Integer)
-        votes = Column(Integer)
+        votes = Column(String)
         reason = Column(String)
         influencing = Column(Boolean)
 
