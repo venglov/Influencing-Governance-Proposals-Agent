@@ -1,7 +1,7 @@
 import eth_abi
 from eth_utils import keccak, encode_hex
 from forta_agent import create_transaction_event, get_json_rpc_url
-from src.agent import provide_handle_transaction
+from src.agent import provide_handle_transaction, reset_inited
 from web3 import Web3
 from src.const import GOVERNOR_BRAVO_CONTRACT_ADDRESS, UNISWAP_CONTRACT_ADDRESS
 from src.test.web3_mock import Web3Mock
@@ -18,11 +18,10 @@ DELEGATE_VOTES_CHANGED = "DelegateVotesChanged(address,uint256,uint256)"
 VOTER = "0x1111111111111111111111111111111111111111"
 PROPOSER = "0x2222222222222222222222222222222222222222"
 PROPOSAL_ID = 1
-checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300)]
 
 
 # VoteCast(address,uint,uint8,uint,string) #
-def vote_cast(id, votes):
+def vote_cast(id, votes, address_=GOVERNOR_BRAVO_CONTRACT_ADDRESS):
     hash = keccak(text=VOTE_CAST)
     data = eth_abi.encode_abi(["uint256", "uint8", "uint256", "string"], [id, 1, votes, ""])
     data = encode_hex(data)
@@ -31,11 +30,11 @@ def vote_cast(id, votes):
     topics = [hash, address]
     return {'topics': topics,
             'data': data,
-            'address': GOVERNOR_BRAVO_CONTRACT_ADDRESS}
+            'address': address_}
 
 
 # ProposalCreated(uint,address,address[],uint[],string[],bytes[],uint,uint,string) #
-def proposal_created(start, end, proposal_id):
+def proposal_created(start, end, proposal_id, address_=GOVERNOR_BRAVO_CONTRACT_ADDRESS):
     hash = keccak(text=PROPOSAL_CREATED)
     data = eth_abi.encode_abi(
         ["uint256", "address", "address[]", "uint256[]", "string[]", "bytes[]", "uint256", "uint256", "string"],
@@ -45,11 +44,11 @@ def proposal_created(start, end, proposal_id):
     topics = [hash]
     return {'topics': topics,
             'data': data,
-            'address': GOVERNOR_BRAVO_CONTRACT_ADDRESS}
+            'address': address_}
 
 
 # DelegateVotesChanged(address,uint,uint) #
-def delegate_votes_changed(old_power, new_power):
+def delegate_votes_changed(old_power, new_power, address_=UNISWAP_CONTRACT_ADDRESS):
     hash = keccak(text=DELEGATE_VOTES_CHANGED)
     data = eth_abi.encode_abi(["uint256", "uint256"], [old_power, new_power])
     data = encode_hex(data)
@@ -58,11 +57,13 @@ def delegate_votes_changed(old_power, new_power):
     topics = [hash, address]
     return {'topics': topics,
             'data': data,
-            'address': UNISWAP_CONTRACT_ADDRESS}
+            'address': address_}
 
 
 class TestInfluencingGovernanceProposals:
     def test_returns_influencing_before_finding(self):
+        reset_inited()
+        checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300)]
         w3 = Web3Mock(checkpoints)
         tx_event = create_transaction_event({
             'transaction': {
@@ -77,7 +78,7 @@ class TestInfluencingGovernanceProposals:
                 'logs': [proposal_created(150, 250, 1)]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
         assert len(findings) == 1
 
         tx_event = create_transaction_event({
@@ -93,11 +94,69 @@ class TestInfluencingGovernanceProposals:
                 'logs': [vote_cast(1, 10300)]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
-        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-1'), None)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-INC'), None)
         assert finding
 
-    def test_returns_influencing_after_finding(self):
+    def test_returns_zero_findings_if_voting_power_was_not_increased_before(self):
+        reset_inited()
+        checkpoints = [(100, 10300), (120, 10300), (140, 10300), (160, 10300)]
+        w3 = Web3Mock(checkpoints)
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': PROPOSER,
+                'to': UNISWAP_CONTRACT_ADDRESS,
+                'hash': "0"
+            },
+            'block': {
+                'number': 150
+            },
+            'receipt': {
+                'logs': [proposal_created(150, 250, 1)]}
+        })
+        provide_handle_transaction(w3, test=True)(tx_event)
+
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': VOTER,
+                'to': UNISWAP_CONTRACT_ADDRESS,
+                'hash': "0"
+            },
+            'block': {
+                'number': 160
+            },
+            'receipt': {
+                'logs': [vote_cast(1, 10300)]}
+        })
+
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        assert not findings
+
+    def test_returns_decreasing_influencing_after_finding(self):
+        reset_inited()
+        self.test_returns_zero_findings_if_voting_power_was_not_increased_before()
+        checkpoints = [(100, 10300), (120, 10300), (140, 10300), (160, 10300), (180, 100)]
+        w3 = Web3Mock(checkpoints)
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': PROPOSER,
+                'to': UNISWAP_CONTRACT_ADDRESS,
+                'hash': "0"
+            },
+            'block': {
+                'number': 180
+            },
+            'receipt': {
+                'logs': [delegate_votes_changed(10300, 100)]}
+        })
+
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-DEC'), None)
+        assert finding
+
+    def test_returns_full_influencing_after_finding(self):
+        reset_inited()
+        self.test_returns_influencing_before_finding()
         checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300), (180, 100)]
         w3 = Web3Mock(checkpoints)
         tx_event = create_transaction_event({
@@ -113,13 +172,16 @@ class TestInfluencingGovernanceProposals:
                 'logs': [delegate_votes_changed(10300, 100)]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
-        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-2'), None)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-FULL'), None)
         assert finding
 
-    def test_returns_zero_findings_if_voting_power_was_not_increased_before(self):
-        checkpoints = [(100, 100), (120, 100), (140, 300), (160, 100)]
+    def test_returns_zero_findings_if_voting_power_was_not_decreased_after_and_increased_before(self):
+        reset_inited()
+        checkpoints = [(100, 10300), (120, 10300), (140, 10300), (160, 10300), (180, 10250)]
         w3 = Web3Mock(checkpoints)
+        self.test_returns_zero_findings_if_voting_power_was_not_increased_before()
+
         tx_event = create_transaction_event({
             'transaction': {
                 'from': VOTER,
@@ -127,17 +189,53 @@ class TestInfluencingGovernanceProposals:
                 'hash': "0"
             },
             'block': {
+                'number': 180
+            },
+            'receipt': {
+                'logs': [delegate_votes_changed(10300, 10250)]}
+        })
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        assert not findings
+
+    def test_returns_zero_findings_if_address_is_wrong(self):
+        reset_inited()
+        checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300)]
+        w3 = Web3Mock(checkpoints)
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': PROPOSER,
+                'to': "0x12345123451234512345",
+                'hash': "0"
+            },
+            'block': {
+                'number': 150
+            },
+            'receipt': {
+                'logs': [proposal_created(150, 250, 1, address_="0x12345123451234512345")]}
+        })
+
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        assert not findings
+
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': VOTER,
+                'to': "0x12345123451234512345",
+                'hash': "0"
+            },
+            'block': {
                 'number': 160
             },
             'receipt': {
-                'logs': [vote_cast(1, 100)]}
+                'logs': [vote_cast(1, 10300, address_="0x12345123451234512345")]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
         assert not findings
 
-    def test_returns_zero_findings_if_voting_power_was_not_decreased_after(self):
-        checkpoints = [(50300, 100), (50320, 100), (50340, 100), (50360, 100), (50380, 99)]
+    def test_returns_zero_findings_if_changes_are_out_of_the_check_range(self):
+        reset_inited()
+        checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300), (300, 10300)]
         w3 = Web3Mock(checkpoints)
         tx_event = create_transaction_event({
             'transaction': {
@@ -146,16 +244,14 @@ class TestInfluencingGovernanceProposals:
                 'hash': "0"
             },
             'block': {
-                'number': 50350
+                'number': 290
             },
             'receipt': {
-                'logs': [proposal_created(50350, 50450, 2)]}
+                'logs': [proposal_created(290, 310, 1)]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
         assert len(findings) == 1
-        finding = next((x for x in findings if x.alert_id == 'UNI-GOV-3'), None)
-        assert finding
 
         tx_event = create_transaction_event({
             'transaction': {
@@ -164,11 +260,29 @@ class TestInfluencingGovernanceProposals:
                 'hash': "0"
             },
             'block': {
-                'number': 50360
+                'number': 300
             },
             'receipt': {
-                'logs': [delegate_votes_changed(100, 99)]}
+                'logs': [vote_cast(1, 10300)]}
         })
 
-        findings = provide_handle_transaction(w3)(tx_event)
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
+        assert not findings
+
+        checkpoints = [(100, 100), (120, 100), (140, 10300), (160, 10300), (300, 10300), (450, 100)]
+        w3 = Web3Mock(checkpoints)
+        tx_event = create_transaction_event({
+            'transaction': {
+                'from': PROPOSER,
+                'to': UNISWAP_CONTRACT_ADDRESS,
+                'hash': "0"
+            },
+            'block': {
+                'number': 450
+            },
+            'receipt': {
+                'logs': [delegate_votes_changed(10300, 100)]}
+        })
+
+        findings = provide_handle_transaction(w3, test=True)(tx_event)
         assert not findings

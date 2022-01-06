@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, String, Integer, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 
 
@@ -21,5 +21,6 @@ async def wrapped_models(Base: declarative_base):
         block_number = Column(Integer)
         votes = Column(Integer)
         reason = Column(String)
+        influencing = Column(Boolean)
 
     return Proposals, Votes

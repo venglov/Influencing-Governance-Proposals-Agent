@@ -7,7 +7,7 @@ from src.const import UNISWAP_CONTRACT_ADDRESS, GOVERNOR_BRAVO_CONTRACT_ADDRESS
 from src.db.config import config
 from src.db.controller import init_async_db
 from src.utils import extract_argument
-from src.config import BLOCKS_LEADING_UP_TO_THE_PROPOSAL, BLOCKS_AFTER_VOTE_CAST, VOTING_POWER_TH
+from src.config import BLOCKS_LEADING_UP_TO_THE_PROPOSAL, BLOCKS_AFTER_VOTE_CAST, VOTING_POWER_TH_LOW
 from src.findings import InfluencingGovernanceProposalsFindings
 
 inited = False  # Initialization Pattern
@@ -72,12 +72,7 @@ async def detect_cast_vote(transaction_event: forta_agent.transaction_event.Tran
         support = extract_argument(event, "support")
         votes_ = extract_argument(event, "votes")
         reason = extract_argument(event, "reason")
-
-        # add this vote to the db
-        await votes.paste_row(
-            {'voter': voter, 'block_number': transaction_event.block_number, 'proposal_id': proposal_id,
-             'support': support, 'votes': votes_, 'reason': reason})
-        await votes.commit()
+        influencing = False
 
         # get the amount of checkpoints of the current voter
         num_checkpoints = contract.functions.numCheckpoints(account=voter).call(transaction_event.block_number)
@@ -109,9 +104,19 @@ async def detect_cast_vote(transaction_event: forta_agent.transaction_event.Tran
             if block_at_i < target_block:
                 break
             # emit an alert if difference is bigger than th
-            if current_voting_power - voting_power_at_i > VOTING_POWER_TH:
-                findings.append(InfluencingGovernanceProposalsFindings.influencing_before_voting(proposal_id, voter))
+            dif = current_voting_power - voting_power_at_i
+            if dif > VOTING_POWER_TH_LOW:
+                findings.append(InfluencingGovernanceProposalsFindings.influencing_before_voting(proposal_id, voter,
+                                                                                                 support, votes_,
+                                                                                                 reason, dif))
+                influencing = True
                 break
+
+        # add this vote to the db
+        await votes.paste_row(
+            {'voter': voter, 'block_number': transaction_event.block_number, 'proposal_id': proposal_id,
+             'support': support, 'votes': votes_, 'reason': reason, 'influencing': influencing})
+        await votes.commit()
 
     return findings
 
@@ -132,14 +137,23 @@ async def detect_voting_power_decrease_after_cast(transaction_event: forta_agent
         known_votes = await votes.get_all_rows()
 
         # check if this address exist in our db
-        if delegate in [ended_vote.voter for ended_vote in known_votes]:
+        if delegate in [known_vote.voter for known_vote in known_votes]:
             vote = await votes.get_row_by_criteria({'voter': delegate})
+            if not vote:
+                continue
 
             # compare his voting power in the moment of the cast and current; emit an alert if the difference is bigger
             # than th
-            if (vote.votes - new_balance) > VOTING_POWER_TH:
+            dif = vote.votes - new_balance
+            if dif > VOTING_POWER_TH_LOW:
                 findings.append(
-                    InfluencingGovernanceProposalsFindings.influencing_after_voting(vote.proposal_id, delegate))
+                    InfluencingGovernanceProposalsFindings.influencing_after_voting(vote.proposal_id, delegate,
+                                                                                    vote.support, vote.votes,
+                                                                                    vote.reason, dif)
+                    if not vote.influencing else InfluencingGovernanceProposalsFindings.influencing_full(
+                        vote.proposal_id,
+                        delegate, vote.support, vote.votes,
+                        vote.reason, dif))
 
     return findings
 
@@ -159,13 +173,13 @@ async def clear_db(transaction_event: forta_agent.transaction_event.TransactionE
     return []
 
 
-async def main(transaction_event: forta_agent.transaction_event.TransactionEvent, w3):
+async def main(transaction_event: forta_agent.transaction_event.TransactionEvent, w3, test):
     """
     This function is used to start detect-functions in the different threads and then gather the findings
     """
     global inited
     if not inited:
-        proposals_table, votes_table = await init_async_db()
+        proposals_table, votes_table = await init_async_db(test)
         config.set_tables(proposals_table, votes_table)
         inited = True
 
@@ -177,9 +191,9 @@ async def main(transaction_event: forta_agent.transaction_event.TransactionEvent
     )
 
 
-def provide_handle_transaction(w3):
+def provide_handle_transaction(w3, test=False):
     def handle_transaction(transaction_event: forta_agent.transaction_event.TransactionEvent) -> list:
-        return [finding for findings in asyncio.run(main(transaction_event, w3)) for finding in findings]
+        return [finding for findings in asyncio.run(main(transaction_event, w3, test)) for finding in findings]
 
     return handle_transaction
 
@@ -189,3 +203,8 @@ real_handle_transaction = provide_handle_transaction(web3)
 
 def handle_transaction(transaction_event: forta_agent.transaction_event.TransactionEvent):
     return real_handle_transaction(transaction_event)
+
+
+def reset_inited():
+    global inited
+    inited = False
